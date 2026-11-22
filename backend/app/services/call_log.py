@@ -9,7 +9,10 @@ class CallLogService(BaseModuleService):
     MODULE = "call_log"
     ENTITY = "调用记录"
     OPERATION_TERM = "校验"
-    LIST_FIELDS = ["记录编号", "接口端点", "请求参数", "响应状态", "响应耗时", "返回行数", "错误信息", "调用时间"]
+    LIST_FIELDS = [
+        "记录编号", "归属编号", "端点编号", "接口端点", "提供方编号", "提供方名称",
+        "请求路径", "请求参数", "响应状态", "响应耗时", "返回行数", "错误信息", "调用时间",
+    ]
     REQUIRED_FIELDS = ["记录编号", "接口端点", "请求参数"]
     STATUS_ORDER = ["成功", "超时", "限流拒绝", "鉴权失败"]
     ACTION_RULES = {"标记审计": "超时", "标记重试": "限流拒绝"}
@@ -47,12 +50,17 @@ class CallLogService(BaseModuleService):
         })
 
     def _enqueue_from_log(self, log: dict):
-        """从调用日志创建重放任务。"""
+        """从调用日志创建重放任务，并沿日志上的归属继续使用同一来源。"""
         retry_rows = store.rows("retry_queue")
         lid = str(log["id"]).zfill(4)
         retry_rows.append({
             "id": max((int(r.get("id", 0)) for r in retry_rows), default=0) + 1,
             "任务编号": f"RETR-CALL-{lid}",
+            "归属编号": log.get("归属编号", ""),
+            "端点编号": log.get("端点编号", ""),
+            "提供方编号": log.get("提供方编号", ""),
+            "提供方名称": log.get("提供方名称", ""),
+            "请求路径": log.get("请求路径", ""),
             "失败端点": log.get("接口端点", ""),
             "失败原因": f"调用日志{lid}限流拒绝或超时",
             "重试次数": 0,
@@ -72,13 +80,17 @@ class CallLogService(BaseModuleService):
                 tracker["最后同步"] = "2026-11-17"
 
     def calc_call_metrics(self, endpoint: str) -> dict:
-        """跨模块调用指标：汇总日志+重试+监控+限流+治理。"""
-        logs = [l for l in store.rows("call_log") if l.get("接口端点") == endpoint]
+        """跨模块调用指标：按稳定端点编号汇总日志+重试+监控+限流+治理。"""
+        logs = [
+            l for l in store.rows("call_log")
+            if l.get("端点编号") == endpoint or l.get("接口端点") == endpoint
+        ]
         retries = [r for r in store.rows("retry_queue") if r.get("失败端点") == endpoint]
         monitors = [m for m in store.rows("api_monitor") if m.get("目标端点") == endpoint]
         rate_limits = [rl for rl in store.rows("rate_limit") if rl.get("目标端点") == endpoint]
         return {
             "endpoint": endpoint,
+            "sources": sorted({str(l.get("归属编号")) for l in logs if l.get("归属编号")}),
             "total_calls": len(logs),
             "success_rate": sum(1 for l in logs if l.get("status") == "成功") / len(logs) if logs else 1.0,
             "avg_latency_ms": sum(int(l.get("响应耗时(ms)", 0)) for l in logs) / len(logs) if logs else 0,

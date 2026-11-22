@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from app.services.base import BaseModuleService
+from app.services.source_attribution import find_provider_by_ref
 from app.store import store
 
 
@@ -9,7 +10,7 @@ class CostAccountService(BaseModuleService):
     MODULE = "cost_account"
     ENTITY = "用量账单"
     OPERATION_TERM = "校验"
-    LIST_FIELDS = ["账单编号", "提供方", "计费周期", "调用次数", "数据流量", "超出配额", "费用预估", "账单状态"]
+    LIST_FIELDS = ["账单编号", "提供方", "提供方编号", "计费周期", "归属范围", "调用次数", "数据流量", "超出配额", "费用预估", "账单状态"]
     REQUIRED_FIELDS = ["账单编号", "提供方", "计费周期"]
     STATUS_ORDER = ["统计中", "已核算", "超额告警", "已确认"]
     ACTION_RULES = {"启动核算": "已核算", "确认账单": "超额告警", "标记超额": "已确认"}
@@ -34,12 +35,36 @@ class CostAccountService(BaseModuleService):
         return entry, message
 
     def _calc_usage_from_logs(self, cost: dict):
-        """从调用日志计算关联提供方的实际用量。"""
-        provider_name = cost.get("提供方", "")
-        logs = [l for l in store.rows("call_log") if provider_name in str(l.get("接口端点", ""))]
-        cost["调用次数"] = len(logs)
-        cost["数据流量(MB)"] = sum(int(l.get("返回行数", 0)) for l in logs)
-        cost["费用预估"] = len(logs) * 0.005
+        """只按调用日志上的真实来源（提供方编号/归属编号）领取用量。
+
+        历史上靠提供方名称匹配端点展示名，改名或同名路径就会串账；这里改为
+        稳定编号优先，名称只作为没有编号时的兜底。
+        """
+        provider_id = str(cost.get("提供方编号") or "").strip()
+        attribution_id = str(cost.get("归属编号") or "").strip()
+        logs = store.rows("call_log")
+        if attribution_id:
+            matched = [l for l in logs if str(l.get("归属编号")) == attribution_id]
+        elif provider_id:
+            matched = [l for l in logs if str(l.get("提供方编号")) == provider_id]
+        else:
+            # 没有稳定编号时先按提供方名称回溯到提供方编号，再按编号领取用量。
+            provider_name = str(cost.get("提供方", ""))
+            provider = find_provider_by_ref(provider_name)
+            if provider is not None:
+                provider_id = str(provider.get("提供方编号") or "")
+                cost["提供方编号"] = provider_id
+                matched = [l for l in logs if str(l.get("提供方编号")) == provider_id]
+            else:
+                matched = [l for l in logs if str(l.get("提供方名称")) == provider_name]
+                if not matched:
+                    cost["待核理由"] = (
+                        f"提供方「{provider_name}」没有可核验的编号或归属记录，用量无法归账"
+                    )
+        cost["调用次数"] = len(matched)
+        cost["数据流量(MB)"] = sum(int(l.get("返回行数", 0) or 0) for l in matched)
+        cost["费用预估"] = len(matched) * 0.005
+        cost["归属范围"] = ",".join(sorted({str(l.get("归属编号")) for l in matched if l.get("归属编号")}))
 
     def _check_sla_limits(self, cost: dict):
         """核对提供方SLA中的QPS上限。"""
@@ -116,5 +141,6 @@ class CostAccountService(BaseModuleService):
             "overrun_bills": sum(1 for c in costs if c.get("status") == "超额告警"),
             "total_providers": len(providers),
             "total_calls_logged": len(logs),
+            "attributed_calls": sum(1 for l in logs if l.get("归属编号")),
             "avg_cost_per_call": sum(float(c.get("费用预估", 0)) for c in costs) / len(logs) if logs else 0.0,
         }

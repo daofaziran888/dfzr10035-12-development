@@ -13,7 +13,20 @@ class BaseModuleService:
     REQUIRED_FIELDS: list[str] = []
     STATUS_ORDER: list[str] = []
     ACTION_RULES: dict[str, str] = {}
+    # 只改状态、不需要额外入参的动作可以走基类；其余动作由子类自行处理。
+    SIDE_EFFECT_ACTIONS: list[str] = []
+    ACTIONS: list[str] = []
     NEGATIVE_ACTIONS: list[str] = []
+
+    def __init__(self) -> None:
+        # 最近一次登记/动作的失败原因。通用路由在 entry 为空时读取它，
+        # 这样领域服务可以给出「为什么没通过」而不只是「缺哪个字段」。
+        self.last_error = ""
+        self.action_blocked = False
+        # 动作备注：改名、标记来源不明等动作需要人填写的依据。
+        self.action_remark = ""
+        # 动作的结构化入参；与备注分开，避免把依据写进业务字段。
+        self.action_values: dict[str, Any] = {}
 
     def list_entries(
         self,
@@ -44,6 +57,8 @@ class BaseModuleService:
         return store.find(self.MODULE, entry_id)
 
     def create_entry(self, values: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
+        self.last_error = ""
+        self.action_blocked = False
         missing = [
             field for field in self.REQUIRED_FIELDS
             if not str(values.get(field) or "").strip()
@@ -60,6 +75,8 @@ class BaseModuleService:
         return entry, []
 
     def run_action(self, entry_id: int, action: str) -> tuple[dict[str, Any] | None, str]:
+        self.last_error = ""
+        self.action_blocked = False
         entry = store.find(self.MODULE, entry_id)
         if entry is None:
             return None, f"{self.ENTITY} {entry_id} 不存在或已归档"
@@ -70,6 +87,12 @@ class BaseModuleService:
         entry["pending"] = target != self.STATUS_ORDER[-1]
         entry["abnormal"] = action in self.NEGATIVE_ACTIONS
         return entry, f"{self.ENTITY}已{action}"
+
+    def action_names(self) -> list[str]:
+        """可执行动作清单：状态的流转 + 领域侧效应动作。"""
+        if self.ACTIONS:
+            return list(self.ACTIONS)
+        return [*self.ACTION_RULES, *self.SIDE_EFFECT_ACTIONS]
 
     def domain_snapshot(self) -> dict[str, Any]:
         """输出模块级数据质量快照，供跨模块消费和题位源码锚点使用。"""

@@ -35,7 +35,11 @@ class SampleCheckService(BaseModuleService):
     def _sample_from_call_logs(self, check: dict):
         """从调用日志中抽取样本记录。"""
         endpoint = check.get("目标端点", "")
-        ratio = float(str(check.get("抽样比例", "10")).replace("%", "")) / 100.0
+        try:
+            ratio = float(str(check.get("抽样比例", "10")).replace("%", "")) / 100.0
+        except ValueError:
+            # 抽样比例登记的是说明文字时按默认 10% 采样，不让整条动作失败。
+            ratio = 0.1
         logs = [l for l in store.rows("call_log") if l.get("接口端点") == endpoint]
         sample_count = max(1, int(len(logs) * ratio))
         check["样本数量"] = sample_count

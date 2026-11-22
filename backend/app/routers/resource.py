@@ -21,6 +21,13 @@ def require_service(module: str):
     return service
 
 
+@router.get("/{module}/actions", response_model=dict)
+def list_actions(module: str) -> dict[str, Any]:
+    """动作清单：页面按后端实际支持的动作渲染，避免登记了却执行不了。"""
+    service = require_service(module)
+    return {"module": module, "entity": service.ENTITY, "actions": service.action_names()}
+
+
 @router.get("/{module}", response_model=PageResult[dict])
 def list_entries(
     module: str,
@@ -86,13 +93,29 @@ def get_entry(module: str, entry_id: int) -> dict[str, Any]:
 def create_entry(module: str, payload: EntryPayload) -> ActionResult:
     service = require_service(module)
     entry, missing = service.create_entry(payload.values)
-    if missing:
-        return ActionResult(ok=False, message=f"缺少必填字段：{'、'.join(missing)}")
-    return ActionResult(ok=True, message=f"{service.ENTITY}已登记", entry=entry)
+    if entry is None:
+        if missing:
+            return ActionResult(ok=False, message=f"缺少必填字段：{'、'.join(missing)}")
+        # 领域服务拒绝了登记（编号冲突、路径与端点不一致等），返回具体原因。
+        reason = getattr(service, "last_error", "") or f"{service.ENTITY}未通过登记校验"
+        return ActionResult(ok=False, message=reason)
+    message = f"{service.ENTITY}已登记"
+    # 登记成功但需要人工关注（例如来源归属待核验）时，把领域原因带出去。
+    warning = getattr(service, "last_error", "")
+    if warning:
+        message += f"；{warning}"
+    return ActionResult(ok=True, message=message, entry=entry)
 
 
 @router.post("/{module}/{entry_id}/actions", response_model=ActionResult)
 def run_action(module: str, entry_id: int, payload: ActionPayload) -> ActionResult:
     service = require_service(module)
+    # 备注交给领域服务读取：改名、标记来源不明等动作需要人填写的依据。
+    service.action_remark = (payload.remark or "").strip()
+    service.action_values = dict(payload.values or {})
     entry, message = service.run_action(entry_id, payload.action.strip())
+    if entry is None and getattr(service, "action_blocked", False):
+        # 领域服务主动拦截时返回它给出的原因，而不是笼统的「不存在」。
+        reason = getattr(service, "last_error", "") or message
+        return ActionResult(ok=False, message=reason, entry=service.get_entry(entry_id))
     return ActionResult(ok=entry is not None, message=message, entry=entry)

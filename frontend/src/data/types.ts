@@ -8,6 +8,12 @@ export type EntryRow = {
   [field: string]: string | number | boolean
 }
 
+export type ActionInput = {
+  field: string
+  label: string
+  required: boolean
+}
+
 export type ModuleMeta = {
   key: string
   name: string
@@ -18,6 +24,10 @@ export type ModuleMeta = {
   actions: string[]
   actionTargets: Record<string, string>
   metrics: string[]
+  // 需要人工填参的动作（改名、变更归属、写明待核理由）；字段名与后端 values 对齐。
+  actionInputs?: Record<string, ActionInput[]>
+  // 登记表单真正必填的字段；缺省时沿用「全部必填」的老规则。
+  requiredFields?: string[]
 }
 
 export type PageResult = {

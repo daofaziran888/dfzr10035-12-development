@@ -5,6 +5,7 @@ from app.services.base import BaseModuleService
 from app.services.api_provider import ApiProviderService
 from app.services.auth_profile import AuthProfileService
 from app.services.endpoint_def import EndpointDefService
+from app.services.source_attribution import SourceAttributionService
 from app.services.rate_limit import RateLimitService
 from app.services.request_batch import RequestBatchService
 from app.services.response_parse import ResponseParseService
@@ -29,6 +30,7 @@ SERVICES: dict[str, BaseModuleService] = {
     "api_provider": ApiProviderService(),
     "auth_profile": AuthProfileService(),
     "endpoint_def": EndpointDefService(),
+    "source_attribution": SourceAttributionService(),
     "rate_limit": RateLimitService(),
     "request_batch": RequestBatchService(),
     "response_parse": ResponseParseService(),

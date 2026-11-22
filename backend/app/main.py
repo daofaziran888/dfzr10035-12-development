@@ -186,6 +186,13 @@ def chain_encrypt_coverage():
     return DataEncryptService().check_encrypt_coverage()
 
 
+@app.get("/api/chain/attribution-coverage")
+def chain_attribution_coverage():
+    """链路22：来源归属去向核对（跨 source_attribution/request_batch/call_log/retry_queue）"""
+    from app.services.source_attribution import SourceAttributionService
+    return SourceAttributionService().attribution_coverage()
+
+
 @app.get("/api/chain/snapshot")
 def chain_snapshot():
     """综合快照：一次性输出所有模块的 domain_snapshot 信息。"""
